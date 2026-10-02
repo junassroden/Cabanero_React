@@ -2,44 +2,29 @@ import { useEffect, useMemo, useState } from 'react';
 import API_URL from './services/api';
 import './index.css';
 
-const getCurrentPath = () => window.location.pathname;
+function getPath() {
+    return window.location.pathname;
+}
 
-const getProductIdFromPath = () => {
+function getProductId() {
     const match = window.location.pathname.match(
         /^\/products\/([^/]+)\/edit$/
     );
 
     return match ? match[1] : null;
-};
-
-const getApiErrorMessage = async (response, fallback) => {
-    try {
-        const data = await response.json();
-
-        if (data?.error) {
-            return data.error;
-        }
-
-        if (data?.message) {
-            return data.message;
-        }
-
-        return fallback;
-    } catch {
-        return fallback;
-    }
-};
+}
 
 function App() {
     const [token, setToken] = useState(
         () => localStorage.getItem('access_token')
     );
 
-    const [path, setPath] = useState(getCurrentPath);
+    const [path, setPath] = useState(getPath());
 
     const [products, setProducts] = useState([]);
 
     const [loading, setLoading] = useState(false);
+
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
 
@@ -53,13 +38,13 @@ function App() {
     const [price, setPrice] = useState('');
     const [quantity, setQuantity] = useState('');
 
-    const [deleteProduct, setDeleteProduct] = useState(null);
+    const [deleteTarget, setDeleteTarget] = useState(null);
 
-    const productId = getProductIdFromPath();
+    const productId = getProductId();
 
-    const navigate = (nextPath) => {
-        window.history.pushState({}, '', nextPath);
-        setPath(nextPath);
+    const navigate = (url) => {
+        window.history.pushState({}, '', url);
+        setPath(url);
 
         setError('');
         setSuccess('');
@@ -67,12 +52,15 @@ function App() {
 
     useEffect(() => {
         const handlePopState = () => {
-            setPath(getCurrentPath());
+            setPath(getPath());
             setError('');
             setSuccess('');
         };
 
-        window.addEventListener('popstate', handlePopState);
+        window.addEventListener(
+            'popstate',
+            handlePopState
+        );
 
         return () => {
             window.removeEventListener(
@@ -81,6 +69,11 @@ function App() {
             );
         };
     }, []);
+
+    const clearMessages = () => {
+        setError('');
+        setSuccess('');
+    };
 
     const showError = (message) => {
         setError(message);
@@ -92,27 +85,45 @@ function App() {
         setError('');
     };
 
-    const clearMessages = () => {
-        setError('');
-        setSuccess('');
-    };
-
-    const handleNetworkError = () => {
-        return (
-            'Unable to connect to the product API. Please check the API connection and try again.'
-        );
-    };
-
-    const handleSessionExpired = () => {
+    const logout = () => {
         localStorage.removeItem('access_token');
 
         setToken(null);
         setProducts([]);
 
-        resetProductForm();
+        resetForm();
 
         window.history.pushState({}, '', '/');
         setPath('/');
+    };
+
+    const handleUnauthorized = () => {
+        localStorage.removeItem('access_token');
+
+        setToken(null);
+        setProducts([]);
+
+        resetForm();
+
+        window.history.pushState({}, '', '/');
+        setPath('/');
+    };
+
+    const getErrorMessage = async (
+        response,
+        fallback
+    ) => {
+        try {
+            const data = await response.json();
+
+            return (
+                data?.error ||
+                data?.message ||
+                fallback
+            );
+        } catch {
+            return fallback;
+        }
     };
 
     const login = async (event) => {
@@ -127,7 +138,8 @@ function App() {
                 {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type':
+                            'application/json'
                     },
                     body: JSON.stringify({
                         username,
@@ -140,15 +152,8 @@ function App() {
 
             if (!response.ok) {
                 throw new Error(
-                    data?.error ||
-                        data?.message ||
+                    data.error ||
                         'Login failed.'
-                );
-            }
-
-            if (!data?.access_token) {
-                throw new Error(
-                    'The API did not return an access token.'
                 );
             }
 
@@ -166,15 +171,23 @@ function App() {
             );
 
             setPath('/products');
-        } catch (err) {
+        } catch (error) {
+            console.error(
+                'Login error:',
+                error
+            );
+
             if (
-                err instanceof TypeError &&
-                err.message === 'Failed to fetch'
+                error instanceof TypeError &&
+                error.message === 'Failed to fetch'
             ) {
-                showError(handleNetworkError());
+                showError(
+                    'The API request could not be completed. Please check the browser console for the network error.'
+                );
             } else {
                 showError(
-                    err.message || 'Login failed.'
+                    error.message ||
+                        'Login failed.'
                 );
             }
         } finally {
@@ -182,9 +195,11 @@ function App() {
         }
     };
 
-    const getProducts = async () => {
+    const fetchProducts = async () => {
         const savedToken =
-            localStorage.getItem('access_token');
+            localStorage.getItem(
+                'access_token'
+            );
 
         if (!savedToken) {
             setToken(null);
@@ -206,7 +221,7 @@ function App() {
             );
 
             if (response.status === 401) {
-                handleSessionExpired();
+                handleUnauthorized();
 
                 throw new Error(
                     'Your session has expired. Please sign in again.'
@@ -214,31 +229,38 @@ function App() {
             }
 
             if (!response.ok) {
-                const message =
-                    await getApiErrorMessage(
+                throw new Error(
+                    await getErrorMessage(
                         response,
                         'Failed to load products.'
-                    );
-
-                throw new Error(message);
+                    )
+                );
             }
 
-            const data = await response.json();
+            const data =
+                await response.json();
 
             setProducts(
                 Array.isArray(data?.data)
                     ? data.data
                     : []
             );
-        } catch (err) {
+        } catch (error) {
+            console.error(
+                'Products error:',
+                error
+            );
+
             if (
-                err instanceof TypeError &&
-                err.message === 'Failed to fetch'
+                error instanceof TypeError &&
+                error.message === 'Failed to fetch'
             ) {
-                showError(handleNetworkError());
+                showError(
+                    'Unable to reach the product API.'
+                );
             } else {
                 showError(
-                    err.message ||
+                    error.message ||
                         'Failed to load products.'
                 );
             }
@@ -249,56 +271,24 @@ function App() {
 
     useEffect(() => {
         if (token) {
-            getProducts();
+            fetchProducts();
         }
     }, [token]);
 
-    const resetProductForm = () => {
+    const resetForm = () => {
         setProductName('');
         setDescription('');
         setPrice('');
         setQuantity('');
     };
 
-    const loadProduct = (product) => {
-        setProductName(
-            product.product_name ?? ''
-        );
-
-        setDescription(
-            product.description ?? ''
-        );
-
-        setPrice(
-            product.price ?? ''
-        );
-
-        setQuantity(
-            product.quantity ?? ''
-        );
-    };
-
-    useEffect(() => {
-        if (!token || !productId) {
-            return;
-        }
-
-        const existingProduct = products.find(
-            (product) =>
-                String(product.id) ===
-                String(productId)
-        );
-
-        if (existingProduct) {
-            loadProduct(existingProduct);
-        }
-    }, [productId, products, token]);
-
     const createProduct = async (event) => {
         event.preventDefault();
 
         const savedToken =
-            localStorage.getItem('access_token');
+            localStorage.getItem(
+                'access_token'
+            );
 
         if (!savedToken) {
             setToken(null);
@@ -319,37 +309,41 @@ function App() {
                         Authorization: `Bearer ${savedToken}`
                     },
                     body: JSON.stringify({
-                        product_name: productName,
+                        product_name:
+                            productName,
                         description,
                         price: Number(price),
-                        quantity: Number(quantity)
+                        quantity: Number(
+                            quantity
+                        )
                     })
                 }
             );
 
             if (response.status === 401) {
-                handleSessionExpired();
+                handleUnauthorized();
 
                 throw new Error(
-                    'Your session has expired. Please sign in again.'
+                    'Your session has expired.'
                 );
             }
 
             if (!response.ok) {
-                const message =
-                    await getApiErrorMessage(
+                throw new Error(
+                    await getErrorMessage(
                         response,
                         'Failed to create product.'
-                    );
-
-                throw new Error(message);
+                    )
+                );
             }
 
-            await response.json().catch(() => null);
+            await response
+                .json()
+                .catch(() => null);
 
-            await getProducts();
+            await fetchProducts();
 
-            resetProductForm();
+            resetForm();
 
             window.history.pushState(
                 {},
@@ -362,15 +356,22 @@ function App() {
             showSuccess(
                 'Product created successfully.'
             );
-        } catch (err) {
+        } catch (error) {
+            console.error(
+                'Create product error:',
+                error
+            );
+
             if (
-                err instanceof TypeError &&
-                err.message === 'Failed to fetch'
+                error instanceof TypeError &&
+                error.message === 'Failed to fetch'
             ) {
-                showError(handleNetworkError());
+                showError(
+                    'Unable to reach the product API.'
+                );
             } else {
                 showError(
-                    err.message ||
+                    error.message ||
                         'Failed to create product.'
                 );
             }
@@ -383,7 +384,9 @@ function App() {
         event.preventDefault();
 
         const savedToken =
-            localStorage.getItem('access_token');
+            localStorage.getItem(
+                'access_token'
+            );
 
         if (!savedToken) {
             setToken(null);
@@ -392,7 +395,7 @@ function App() {
 
         if (!productId) {
             showError(
-                'The product could not be identified.'
+                'Product ID was not found.'
             );
 
             return;
@@ -412,37 +415,41 @@ function App() {
                         Authorization: `Bearer ${savedToken}`
                     },
                     body: JSON.stringify({
-                        product_name: productName,
+                        product_name:
+                            productName,
                         description,
                         price: Number(price),
-                        quantity: Number(quantity)
+                        quantity: Number(
+                            quantity
+                        )
                     })
                 }
             );
 
             if (response.status === 401) {
-                handleSessionExpired();
+                handleUnauthorized();
 
                 throw new Error(
-                    'Your session has expired. Please sign in again.'
+                    'Your session has expired.'
                 );
             }
 
             if (!response.ok) {
-                const message =
-                    await getApiErrorMessage(
+                throw new Error(
+                    await getErrorMessage(
                         response,
                         'Failed to update product.'
-                    );
-
-                throw new Error(message);
+                    )
+                );
             }
 
-            await response.json().catch(() => null);
+            await response
+                .json()
+                .catch(() => null);
 
-            await getProducts();
+            await fetchProducts();
 
-            resetProductForm();
+            resetForm();
 
             window.history.pushState(
                 {},
@@ -455,15 +462,22 @@ function App() {
             showSuccess(
                 'Product updated successfully.'
             );
-        } catch (err) {
+        } catch (error) {
+            console.error(
+                'Update product error:',
+                error
+            );
+
             if (
-                err instanceof TypeError &&
-                err.message === 'Failed to fetch'
+                error instanceof TypeError &&
+                error.message === 'Failed to fetch'
             ) {
-                showError(handleNetworkError());
+                showError(
+                    'Unable to reach the product API.'
+                );
             } else {
                 showError(
-                    err.message ||
+                    error.message ||
                         'Failed to update product.'
                 );
             }
@@ -472,13 +486,15 @@ function App() {
         }
     };
 
-    const removeProduct = async () => {
-        if (!deleteProduct) {
+    const deleteProduct = async () => {
+        if (!deleteTarget) {
             return;
         }
 
         const savedToken =
-            localStorage.getItem('access_token');
+            localStorage.getItem(
+                'access_token'
+            );
 
         if (!savedToken) {
             setToken(null);
@@ -490,7 +506,7 @@ function App() {
 
         try {
             const response = await fetch(
-                `${API_URL}/products/${deleteProduct.id}`,
+                `${API_URL}/products/${deleteTarget.id}`,
                 {
                     method: 'DELETE',
                     headers: {
@@ -500,41 +516,49 @@ function App() {
             );
 
             if (response.status === 401) {
-                handleSessionExpired();
+                handleUnauthorized();
 
                 throw new Error(
-                    'Your session has expired. Please sign in again.'
+                    'Your session has expired.'
                 );
             }
 
             if (!response.ok) {
-                const message =
-                    await getApiErrorMessage(
+                throw new Error(
+                    await getErrorMessage(
                         response,
                         'Failed to delete product.'
-                    );
-
-                throw new Error(message);
+                    )
+                );
             }
 
-            await response.json().catch(() => null);
+            await response
+                .json()
+                .catch(() => null);
 
-            setDeleteProduct(null);
+            setDeleteTarget(null);
 
-            await getProducts();
+            await fetchProducts();
 
             showSuccess(
                 'Product deleted successfully.'
             );
-        } catch (err) {
+        } catch (error) {
+            console.error(
+                'Delete product error:',
+                error
+            );
+
             if (
-                err instanceof TypeError &&
-                err.message === 'Failed to fetch'
+                error instanceof TypeError &&
+                error.message === 'Failed to fetch'
             ) {
-                showError(handleNetworkError());
+                showError(
+                    'Unable to reach the product API.'
+                );
             } else {
                 showError(
-                    err.message ||
+                    error.message ||
                         'Failed to delete product.'
                 );
             }
@@ -543,261 +567,315 @@ function App() {
         }
     };
 
-    const logout = () => {
-        localStorage.removeItem('access_token');
+    useEffect(() => {
+        if (!token || !productId) {
+            return;
+        }
 
-        setToken(null);
-        setProducts([]);
+        const product = products.find(
+            (item) =>
+                String(item.id) ===
+                String(productId)
+        );
 
-        resetProductForm();
-        clearMessages();
+        if (!product) {
+            return;
+        }
 
-        window.history.pushState({}, '', '/');
-        setPath('/');
-    };
+        setProductName(
+            product.product_name ?? ''
+        );
+
+        setDescription(
+            product.description ?? ''
+        );
+
+        setPrice(
+            product.price ?? ''
+        );
+
+        setQuantity(
+            product.quantity ?? ''
+        );
+    }, [productId, products, token]);
 
     const filteredProducts = useMemo(() => {
-        const term = search
-            .trim()
-            .toLowerCase();
+        const value =
+            search.trim().toLowerCase();
 
-        if (!term) {
+        if (!value) {
             return products;
         }
 
-        return products.filter((product) => {
-            return (
+        return products.filter(
+            (product) =>
                 String(product.id)
                     .toLowerCase()
-                    .includes(term) ||
+                    .includes(value) ||
                 String(
                     product.product_name || ''
                 )
                     .toLowerCase()
-                    .includes(term) ||
+                    .includes(value) ||
                 String(
                     product.description || ''
                 )
                     .toLowerCase()
-                    .includes(term)
-            );
-        });
+                    .includes(value)
+        );
     }, [products, search]);
 
     if (!token) {
         return (
-            <LoginPage
+            <Login
                 username={username}
                 password={password}
                 setUsername={setUsername}
                 setPassword={setPassword}
-                onSubmit={login}
+                login={login}
                 loading={loading}
                 error={error}
             />
         );
     }
 
-    const isCreatePage =
+    const isCreate =
         path === '/products/create';
 
-    const isEditPage =
-        /^\/products\/[^/]+\/edit$/.test(path);
+    const isEdit =
+        /^\/products\/[^/]+\/edit$/.test(
+            path
+        );
 
     return (
-        <AppShell
-            navigate={navigate}
-            logout={logout}
-        >
-            {isCreatePage && (
-                <ProductFormPage
-                    mode="create"
-                    productName={productName}
-                    description={description}
-                    price={price}
-                    quantity={quantity}
-                    setProductName={
-                        setProductName
-                    }
-                    setDescription={
-                        setDescription
-                    }
-                    setPrice={setPrice}
-                    setQuantity={setQuantity}
-                    onSubmit={createProduct}
-                    loading={loading}
-                    error={error}
-                    success={success}
-                    onCancel={() => {
-                        resetProductForm();
-                        navigate('/products');
-                    }}
-                />
-            )}
+        <div className="app">
+            <Navbar
+                navigate={navigate}
+                logout={logout}
+            />
 
-            {isEditPage && (
-                <ProductFormPage
-                    mode="edit"
-                    productName={productName}
-                    description={description}
-                    price={price}
-                    quantity={quantity}
-                    setProductName={
-                        setProductName
-                    }
-                    setDescription={
-                        setDescription
-                    }
-                    setPrice={setPrice}
-                    setQuantity={setQuantity}
-                    onSubmit={updateProduct}
-                    loading={loading}
-                    error={error}
-                    success={success}
-                    onCancel={() => {
-                        resetProductForm();
-                        navigate('/products');
-                    }}
-                />
-            )}
-
-            {!isCreatePage &&
-                !isEditPage && (
-                    <ProductsPage
-                        products={filteredProducts}
-                        totalProducts={
-                            products.length
+            <main className="main">
+                {isCreate && (
+                    <ProductForm
+                        mode="create"
+                        productName={productName}
+                        description={description}
+                        price={price}
+                        quantity={quantity}
+                        setProductName={
+                            setProductName
                         }
-                        search={search}
-                        setSearch={setSearch}
+                        setDescription={
+                            setDescription
+                        }
+                        setPrice={setPrice}
+                        setQuantity={
+                            setQuantity
+                        }
+                        submit={
+                            createProduct
+                        }
+                        cancel={() => {
+                            resetForm();
+                            navigate(
+                                '/products'
+                            );
+                        }}
                         loading={loading}
                         error={error}
                         success={success}
-                        onRefresh={getProducts}
-                        onAdd={() =>
-                            navigate(
-                                '/products/create'
-                            )
-                        }
-                        onEdit={(product) => {
-                            loadProduct(product);
-
-                            navigate(
-                                `/products/${product.id}/edit`
-                            );
-                        }}
-                        onDelete={
-                            setDeleteProduct
-                        }
                     />
                 )}
 
-            {deleteProduct && (
+                {isEdit && (
+                    <ProductForm
+                        mode="edit"
+                        productName={productName}
+                        description={description}
+                        price={price}
+                        quantity={quantity}
+                        setProductName={
+                            setProductName
+                        }
+                        setDescription={
+                            setDescription
+                        }
+                        setPrice={setPrice}
+                        setQuantity={
+                            setQuantity
+                        }
+                        submit={
+                            updateProduct
+                        }
+                        cancel={() => {
+                            resetForm();
+                            navigate(
+                                '/products'
+                            );
+                        }}
+                        loading={loading}
+                        error={error}
+                        success={success}
+                    />
+                )}
+
+                {!isCreate &&
+                    !isEdit && (
+                        <Products
+                            products={
+                                filteredProducts
+                            }
+                            total={
+                                products.length
+                            }
+                            search={search}
+                            setSearch={
+                                setSearch
+                            }
+                            loading={
+                                loading
+                            }
+                            error={error}
+                            success={
+                                success
+                            }
+                            refresh={
+                                fetchProducts
+                            }
+                            add={() =>
+                                navigate(
+                                    '/products/create'
+                                )
+                            }
+                            edit={(product) => {
+                                setProductName(
+                                    product.product_name ??
+                                        ''
+                                );
+
+                                setDescription(
+                                    product.description ??
+                                        ''
+                                );
+
+                                setPrice(
+                                    product.price ??
+                                        ''
+                                );
+
+                                setQuantity(
+                                    product.quantity ??
+                                        ''
+                                );
+
+                                navigate(
+                                    `/products/${product.id}/edit`
+                                );
+                            }}
+                            remove={
+                                setDeleteTarget
+                            }
+                        />
+                    )}
+            </main>
+
+            {deleteTarget && (
                 <DeleteDialog
-                    product={deleteProduct}
+                    product={deleteTarget}
                     loading={loading}
-                    onCancel={() =>
-                        setDeleteProduct(null)
+                    cancel={() =>
+                        setDeleteTarget(
+                            null
+                        )
                     }
-                    onConfirm={removeProduct}
+                    confirm={deleteProduct}
                 />
             )}
-        </AppShell>
-    );
-}
-
-function AppShell({
-    children,
-    navigate,
-    logout
-}) {
-    return (
-        <div className="app-shell">
-            <header className="topbar">
-                <div className="topbar-inner">
-                    <button
-                        className="brand"
-                        onClick={() =>
-                            navigate('/products')
-                        }
-                    >
-                        <span className="brand-symbol">
-                            P
-                        </span>
-
-                        <span className="brand-text">
-                            <strong>
-                                Product Management
-                            </strong>
-
-                            <small>
-                                Inventory workspace
-                            </small>
-                        </span>
-                    </button>
-
-                    <nav className="navigation">
-                        <button
-                            className="navigation-link active"
-                            onClick={() =>
-                                navigate('/products')
-                            }
-                        >
-                            Products
-                        </button>
-                    </nav>
-
-                    <div className="account-area">
-                        <span className="account-name">
-                            Administrator
-                        </span>
-
-                        <button
-                            className="logout-link"
-                            onClick={logout}
-                        >
-                            Sign out
-                        </button>
-                    </div>
-                </div>
-            </header>
-
-            <main className="content">
-                {children}
-            </main>
         </div>
     );
 }
 
-function LoginPage({
+function Navbar({ navigate, logout }) {
+    return (
+        <header className="navbar">
+            <div className="navbar-inner">
+                <button
+                    className="brand"
+                    onClick={() =>
+                        navigate('/products')
+                    }
+                >
+                    <span className="brand-mark">
+                        P
+                    </span>
+
+                    <span className="brand-copy">
+                        <strong>
+                            Product Management
+                        </strong>
+
+                        <small>
+                            Inventory workspace
+                        </small>
+                    </span>
+                </button>
+
+                <nav>
+                    <button
+                        className="nav-link active"
+                        onClick={() =>
+                            navigate('/products')
+                        }
+                    >
+                        Products
+                    </button>
+                </nav>
+
+                <div className="account">
+                    <span>
+                        Administrator
+                    </span>
+
+                    <button
+                        onClick={logout}
+                    >
+                        Sign out
+                    </button>
+                </div>
+            </div>
+        </header>
+    );
+}
+
+function Login({
     username,
     password,
     setUsername,
     setPassword,
-    onSubmit,
+    login,
     loading,
     error
 }) {
     return (
         <div className="login-page">
-            <div className="login-container">
-                <div className="login-header">
-                    <div className="brand-symbol large">
+            <div className="login-wrapper">
+                <div className="login-brand">
+                    <span className="brand-mark large">
                         P
-                    </div>
+                    </span>
 
                     <div>
                         <strong>
                             Product Management
                         </strong>
 
-                        <span>
+                        <small>
                             Inventory workspace
-                        </span>
+                        </small>
                     </div>
                 </div>
 
-                <section className="login-panel">
+                <section className="login-card">
                     <div className="eyebrow">
                         ACCOUNT ACCESS
                     </div>
@@ -806,7 +884,7 @@ function LoginPage({
                         Sign in
                     </h1>
 
-                    <p className="login-intro">
+                    <p className="muted">
                         Enter your credentials to
                         access the product workspace.
                     </p>
@@ -819,29 +897,28 @@ function LoginPage({
                     )}
 
                     <form
+                        onSubmit={login}
                         className="login-form"
-                        onSubmit={onSubmit}
                     >
-                        <FormField
+                        <Field
                             label="Username"
                             htmlFor="username"
                         >
                             <input
                                 id="username"
-                                type="text"
                                 value={username}
-                                onChange={(event) =>
+                                onChange={(e) =>
                                     setUsername(
-                                        event.target
+                                        e.target
                                             .value
                                     )
                                 }
                                 autoComplete="username"
                                 required
                             />
-                        </FormField>
+                        </Field>
 
-                        <FormField
+                        <Field
                             label="Password"
                             htmlFor="password"
                         >
@@ -849,20 +926,19 @@ function LoginPage({
                                 id="password"
                                 type="password"
                                 value={password}
-                                onChange={(event) =>
+                                onChange={(e) =>
                                     setPassword(
-                                        event.target
+                                        e.target
                                             .value
                                     )
                                 }
                                 autoComplete="current-password"
                                 required
                             />
-                        </FormField>
+                        </Field>
 
                         <button
-                            className="primary-button login-button"
-                            type="submit"
+                            className="button primary full"
                             disabled={loading}
                         >
                             {loading
@@ -886,43 +962,56 @@ function LoginPage({
     );
 }
 
-function ProductsPage({
+function Products({
     products,
-    totalProducts,
+    total,
     search,
     setSearch,
     loading,
     error,
     success,
-    onRefresh,
-    onAdd,
-    onEdit,
-    onDelete
+    refresh,
+    add,
+    edit,
+    remove
 }) {
     return (
         <div className="page">
-            <PageHeader
-                eyebrow="PRODUCTS"
-                title="Product inventory"
-                description="Manage your product catalog and keep inventory information accurate."
-            >
-                <button
-                    className="secondary-button"
-                    onClick={onRefresh}
-                    disabled={loading}
-                >
-                    {loading
-                        ? 'Refreshing...'
-                        : 'Refresh'}
-                </button>
+            <div className="page-header">
+                <div>
+                    <div className="eyebrow">
+                        PRODUCTS
+                    </div>
 
-                <button
-                    className="primary-button"
-                    onClick={onAdd}
-                >
-                    Add product
-                </button>
-            </PageHeader>
+                    <h1>
+                        Product inventory
+                    </h1>
+
+                    <p>
+                        Manage your product catalog
+                        and inventory information.
+                    </p>
+                </div>
+
+                <div className="header-actions">
+                    <button
+                        className="button secondary"
+                        onClick={refresh}
+                        disabled={loading}
+                    >
+                        {loading
+                            ? 'Refreshing...'
+                            : 'Refresh'}
+                    </button>
+
+                    <button
+                        className="button primary"
+                        onClick={add}
+                    >
+                        Add product
+                    </button>
+                </div>
+            </div>
 
             {success && (
                 <Alert
@@ -938,58 +1027,176 @@ function ProductsPage({
                 />
             )}
 
-            <section className="data-panel">
-                <div className="data-toolbar">
-                    <div className="toolbar-title">
+            <section className="table-panel">
+                <div className="table-toolbar">
+                    <div>
                         <strong>
                             All products
                         </strong>
 
                         <span>
-                            {totalProducts}{' '}
-                            {totalProducts === 1
+                            {total}{' '}
+                            {total === 1
                                 ? 'record'
                                 : 'records'}
                         </span>
                     </div>
 
-                    <label className="search-field">
-                        <span>
-                            Search
-                        </span>
-
-                        <input
-                            type="search"
-                            value={search}
-                            onChange={(event) =>
-                                setSearch(
-                                    event.target.value
-                                )
-                            }
-                            placeholder="Product name, description or ID"
-                        />
-                    </label>
+                    <input
+                        className="search"
+                        type="search"
+                        placeholder="Search products..."
+                        value={search}
+                        onChange={(e) =>
+                            setSearch(
+                                e.target.value
+                            )
+                        }
+                    />
                 </div>
 
                 {loading &&
                 products.length === 0 ? (
-                    <LoadingState />
+                    <div className="state">
+                        <div className="spinner" />
+
+                        <strong>
+                            Loading products
+                        </strong>
+
+                        <p>
+                            Retrieving the latest
+                            inventory data.
+                        </p>
+                    </div>
                 ) : products.length === 0 ? (
-                    <EmptyState
-                        hasSearch={Boolean(
-                            search.trim()
+                    <div className="state">
+                        <div className="empty-mark">
+                            P
+                        </div>
+
+                        <strong>
+                            {search
+                                ? 'No matching products'
+                                : 'No products yet'}
+                        </strong>
+
+                        <p>
+                            {search
+                                ? 'Try a different search term.'
+                                : 'Add your first product to begin managing inventory.'}
+                        </p>
+
+                        {!search && (
+                            <button
+                                className="button primary"
+                                onClick={add}
+                            >
+                                Add product
+                            </button>
                         )}
-                        onAdd={onAdd}
-                    />
+                    </div>
                 ) : (
-                    <ProductTable
-                        products={products}
-                        onEdit={onEdit}
-                        onDelete={onDelete}
-                    />
+                    <div className="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>
+                                        Product
+                                    </th>
+                                    <th>
+                                        Description
+                                    </th>
+                                    <th>
+                                        Price
+                                    </th>
+                                    <th>
+                                        Quantity
+                                    </th>
+                                    <th>
+                                        Actions
+                                    </th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                {products.map(
+                                    (product) => (
+                                        <tr
+                                            key={
+                                                product.id
+                                            }
+                                        >
+                                            <td className="id">
+                                                #
+                                                {
+                                                    product.id
+                                                }
+                                            </td>
+
+                                            <td>
+                                                <strong>
+                                                    {
+                                                        product.product_name
+                                                    }
+                                                </strong>
+                                            </td>
+
+                                            <td className="description">
+                                                {product.description ||
+                                                    'No description'}
+                                            </td>
+
+                                            <td className="price">
+                                                ₱
+                                                {Number(
+                                                    product.price
+                                                ).toFixed(
+                                                    2
+                                                )}
+                                            </td>
+
+                                            <td>
+                                                {
+                                                    product.quantity
+                                                }
+                                            </td>
+
+                                            <td>
+                                                <div className="row-actions">
+                                                    <button
+                                                        className="text-button"
+                                                        onClick={() =>
+                                                            edit(
+                                                                product
+                                                            )
+                                                        }
+                                                    >
+                                                        Edit
+                                                    </button>
+
+                                                    <button
+                                                        className="text-button danger"
+                                                        onClick={() =>
+                                                            remove(
+                                                                product
+                                                            )
+                                                        }
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
 
-                <div className="data-footer">
+                <div className="table-footer">
                     <span>
                         {search
                             ? `Showing ${products.length} matching ${
@@ -1007,7 +1214,7 @@ function ProductsPage({
                     </span>
 
                     <span>
-                        Connected to API
+                        API connected
                     </span>
                 </div>
             </section>
@@ -1015,115 +1222,7 @@ function ProductsPage({
     );
 }
 
-function ProductTable({
-    products,
-    onEdit,
-    onDelete
-}) {
-    return (
-        <div className="table-container">
-            <table className="product-table">
-                <thead>
-                    <tr>
-                        <th className="id-column">
-                            ID
-                        </th>
-
-                        <th>
-                            Product
-                        </th>
-
-                        <th>
-                            Description
-                        </th>
-
-                        <th>
-                            Price
-                        </th>
-
-                        <th>
-                            Quantity
-                        </th>
-
-                        <th className="actions-column">
-                            Actions
-                        </th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {products.map((product) => (
-                        <tr key={product.id}>
-                            <td className="id-cell">
-                                #{product.id}
-                            </td>
-
-                            <td>
-                                <div className="product-title">
-                                    {
-                                        product.product_name
-                                    }
-                                </div>
-                            </td>
-
-                            <td>
-                                <div className="description-cell">
-                                    {product.description ||
-                                        'No description'}
-                                </div>
-                            </td>
-
-                            <td>
-                                <span className="price-cell">
-                                    ₱
-                                    {Number(
-                                        product.price
-                                    ).toFixed(2)}
-                                </span>
-                            </td>
-
-                            <td>
-                                <span className="quantity-cell">
-                                    {
-                                        product.quantity
-                                    }
-                                </span>
-                            </td>
-
-                            <td>
-                                <div className="row-actions">
-                                    <button
-                                        className="edit-action"
-                                        onClick={() =>
-                                            onEdit(
-                                                product
-                                            )
-                                        }
-                                    >
-                                        Edit
-                                    </button>
-
-                                    <button
-                                        className="delete-action"
-                                        onClick={() =>
-                                            onDelete(
-                                                product
-                                            )
-                                        }
-                                    >
-                                        Delete
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    );
-}
-
-function ProductFormPage({
+function ProductForm({
     mode,
     productName,
     description,
@@ -1133,52 +1232,50 @@ function ProductFormPage({
     setDescription,
     setPrice,
     setQuantity,
-    onSubmit,
+    submit,
+    cancel,
     loading,
     error,
-    success,
-    onCancel
+    success
 }) {
-    const isEdit = mode === 'edit';
+    const editMode = mode === 'edit';
 
     return (
-        <div className="page form-page">
-            <div className="form-header">
-                <div>
-                    <div className="breadcrumb">
-                        <button
-                            onClick={onCancel}
-                        >
-                            Products
-                        </button>
+        <div className="page">
+            <div className="form-heading">
+                <div className="breadcrumb">
+                    <button
+                        onClick={cancel}
+                    >
+                        Products
+                    </button>
 
-                        <span>/</span>
+                    <span>/</span>
 
-                        <strong>
-                            {isEdit
-                                ? 'Edit product'
-                                : 'New product'}
-                        </strong>
-                    </div>
-
-                    <div className="eyebrow">
-                        {isEdit
-                            ? 'PRODUCT EDITOR'
-                            : 'NEW PRODUCT'}
-                    </div>
-
-                    <h1>
-                        {isEdit
+                    <strong>
+                        {editMode
                             ? 'Edit product'
-                            : 'Create product'}
-                    </h1>
-
-                    <p>
-                        {isEdit
-                            ? 'Update the information for this product and save your changes.'
-                            : 'Add a new product to your inventory with the information below.'}
-                    </p>
+                            : 'New product'}
+                    </strong>
                 </div>
+
+                <div className="eyebrow">
+                    {editMode
+                        ? 'PRODUCT EDITOR'
+                        : 'NEW PRODUCT'}
+                </div>
+
+                <h1>
+                    {editMode
+                        ? 'Edit product'
+                        : 'Create product'}
+                </h1>
+
+                <p>
+                    {editMode
+                        ? 'Update the product information below and save your changes.'
+                        : 'Add a new product to your inventory.'}
+                </p>
             </div>
 
             {success && (
@@ -1197,11 +1294,11 @@ function ProductFormPage({
 
             <form
                 className="product-form"
-                onSubmit={onSubmit}
+                onSubmit={submit}
             >
                 <section className="form-section">
-                    <div className="form-section-title">
-                        <span className="section-index">
+                    <div className="section-heading">
+                        <span>
                             01
                         </span>
 
@@ -1211,56 +1308,55 @@ function ProductFormPage({
                             </h2>
 
                             <p>
-                                Basic information used to
-                                identify the product.
+                                Basic information used
+                                to identify the product.
                             </p>
                         </div>
                     </div>
 
-                    <div className="form-fields">
-                        <FormField
+                    <div className="fields">
+                        <Field
                             label="Product name"
                             htmlFor="product-name"
                         >
                             <input
                                 id="product-name"
-                                type="text"
                                 value={productName}
-                                onChange={(event) =>
+                                onChange={(e) =>
                                     setProductName(
-                                        event.target
+                                        e.target
                                             .value
                                     )
                                 }
                                 placeholder="Enter product name"
                                 required
                             />
-                        </FormField>
+                        </Field>
 
-                        <FormField
+                        <Field
                             label="Description"
-                            htmlFor="product-description"
+                            htmlFor="description"
                             optional
                         >
                             <textarea
-                                id="product-description"
+                                id="description"
                                 value={description}
-                                onChange={(event) =>
+                                onChange={(e) =>
                                     setDescription(
-                                        event.target
+                                        e.target
                                             .value
                                     )
                                 }
                                 placeholder="Enter a short product description"
                                 rows="5"
                             />
-                        </FormField>
+                        </Field>
                     </div>
                 </section>
 
                 <section className="form-section">
-                    <div className="form-section-title">
-                        <span className="section-index">
+                    <div className="section-heading">
+                        <span>
                             02
                         </span>
 
@@ -1270,31 +1366,31 @@ function ProductFormPage({
                             </h2>
 
                             <p>
-                                Set the current price and
-                                available stock quantity.
+                                Set the price and
+                                available quantity.
                             </p>
                         </div>
                     </div>
 
-                    <div className="form-fields form-grid">
-                        <FormField
+                    <div className="fields two-column">
+                        <Field
                             label="Price"
-                            htmlFor="product-price"
+                            htmlFor="price"
                         >
-                            <div className="currency-input">
+                            <div className="price-input">
                                 <span>
                                     ₱
                                 </span>
 
                                 <input
-                                    id="product-price"
+                                    id="price"
                                     type="number"
                                     min="0"
                                     step="0.01"
                                     value={price}
-                                    onChange={(event) =>
+                                    onChange={(e) =>
                                         setPrice(
-                                            event.target
+                                            e.target
                                                 .value
                                         )
                                     }
@@ -1302,35 +1398,35 @@ function ProductFormPage({
                                     required
                                 />
                             </div>
-                        </FormField>
+                        </Field>
 
-                        <FormField
+                        <Field
                             label="Quantity"
-                            htmlFor="product-quantity"
+                            htmlFor="quantity"
                         >
                             <input
-                                id="product-quantity"
+                                id="quantity"
                                 type="number"
                                 min="0"
                                 value={quantity}
-                                onChange={(event) =>
+                                onChange={(e) =>
                                     setQuantity(
-                                        event.target
+                                        e.target
                                             .value
                                     )
                                 }
                                 placeholder="0"
                                 required
                             />
-                        </FormField>
+                        </Field>
                     </div>
                 </section>
 
                 <div className="form-actions">
                     <button
                         type="button"
-                        className="secondary-button"
-                        onClick={onCancel}
+                        className="button secondary"
+                        onClick={cancel}
                         disabled={loading}
                     >
                         Cancel
@@ -1338,14 +1434,14 @@ function ProductFormPage({
 
                     <button
                         type="submit"
-                        className="primary-button"
+                        className="button primary"
                         disabled={loading}
                     >
                         {loading
-                            ? isEdit
+                            ? editMode
                                 ? 'Saving changes...'
                                 : 'Creating product...'
-                            : isEdit
+                            : editMode
                             ? 'Save changes'
                             : 'Create product'}
                     </button>
@@ -1355,14 +1451,14 @@ function ProductFormPage({
     );
 }
 
-function FormField({
+function Field({
     label,
     htmlFor,
     children,
-    optional = false
+    optional
 }) {
     return (
-        <div className="form-field">
+        <div className="field">
             <label htmlFor={htmlFor}>
                 <span>
                     {label}
@@ -1380,49 +1476,16 @@ function FormField({
     );
 }
 
-function PageHeader({
-    eyebrow,
-    title,
-    description,
-    children
-}) {
-    return (
-        <div className="page-header">
-            <div>
-                <div className="eyebrow">
-                    {eyebrow}
-                </div>
-
-                <h1>
-                    {title}
-                </h1>
-
-                <p>
-                    {description}
-                </p>
-            </div>
-
-            <div className="page-header-actions">
-                {children}
-            </div>
-        </div>
-    );
-}
-
-function Alert({
-    type,
-    message
-}) {
+function Alert({ type, message }) {
     return (
         <div
             className={`alert ${
                 type === 'error'
-                    ? 'alert-error'
-                    : 'alert-success'
+                    ? 'error'
+                    : 'success'
             }`}
-            role="alert"
         >
-            <span className="alert-mark">
+            <span className="alert-icon">
                 {type === 'error'
                     ? '!'
                     : '✓'}
@@ -1435,109 +1498,53 @@ function Alert({
     );
 }
 
-function LoadingState() {
-    return (
-        <div className="state">
-            <div className="loading-line" />
-
-            <strong>
-                Loading products
-            </strong>
-
-            <p>
-                Retrieving the latest inventory
-                information.
-            </p>
-        </div>
-    );
-}
-
-function EmptyState({
-    hasSearch,
-    onAdd
-}) {
-    return (
-        <div className="state">
-            <div className="empty-symbol">
-                P
-            </div>
-
-            <strong>
-                {hasSearch
-                    ? 'No matching products'
-                    : 'No products yet'}
-            </strong>
-
-            <p>
-                {hasSearch
-                    ? 'Try adjusting your search.'
-                    : 'Add your first product to begin managing your inventory.'}
-            </p>
-
-            {!hasSearch && (
-                <button
-                    className="primary-button"
-                    onClick={onAdd}
-                >
-                    Add product
-                </button>
-            )}
-        </div>
-    );
-}
-
 function DeleteDialog({
     product,
     loading,
-    onCancel,
-    onConfirm
+    cancel,
+    confirm
 }) {
     return (
         <div
-            className="dialog-overlay"
+            className="modal-backdrop"
             onMouseDown={(event) => {
                 if (
                     event.target ===
                     event.currentTarget
                 ) {
-                    onCancel();
+                    cancel();
                 }
             }}
         >
-            <div
-                className="dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="delete-title"
-            >
-                <div className="dialog-eyebrow">
+            <div className="delete-dialog">
+                <div className="eyebrow">
                     DELETE PRODUCT
                 </div>
 
-                <h2 id="delete-title">
+                <h2>
                     Delete product?
                 </h2>
 
                 <p>
-                    This will permanently remove{' '}
+                    You are about to remove{' '}
                     <strong>
                         {product.product_name}
                     </strong>{' '}
-                    from the product inventory.
+                    from the inventory.
                 </p>
 
                 <div className="dialog-actions">
                     <button
-                        className="secondary-button"
-                        onClick={onCancel}
+                        className="button secondary"
+                        onClick={cancel}
                         disabled={loading}
                     >
                         Cancel
                     </button>
 
                     <button
-                        className="danger-button"
-                        onClick={onConfirm}
+                        className="button danger-button"
+                        onClick={confirm}
                         disabled={loading}
                     >
                         {loading
