@@ -12,6 +12,24 @@ const getProductIdFromPath = () => {
     return match ? match[1] : null;
 };
 
+const getApiErrorMessage = async (response, fallback) => {
+    try {
+        const data = await response.json();
+
+        if (data?.error) {
+            return data.error;
+        }
+
+        if (data?.message) {
+            return data.message;
+        }
+
+        return fallback;
+    } catch {
+        return fallback;
+    }
+};
+
 function App() {
     const [token, setToken] = useState(
         () => localStorage.getItem('access_token')
@@ -79,11 +97,22 @@ function App() {
         setSuccess('');
     };
 
+    const handleNetworkError = () => {
+        return (
+            'Unable to connect to the product API. Please check the API connection and try again.'
+        );
+    };
+
     const handleSessionExpired = () => {
         localStorage.removeItem('access_token');
+
         setToken(null);
         setProducts([]);
-        navigate('/');
+
+        resetProductForm();
+
+        window.history.pushState({}, '', '/');
+        setPath('/');
     };
 
     const login = async (event) => {
@@ -93,22 +122,33 @@ function App() {
         clearMessages();
 
         try {
-            const response = await fetch(`${API_URL}/login`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    username,
-                    password
-                })
-            });
+            const response = await fetch(
+                `${API_URL}/login`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username,
+                        password
+                    })
+                }
+            );
 
             const data = await response.json();
 
             if (!response.ok) {
                 throw new Error(
-                    data.error || 'Login failed.'
+                    data?.error ||
+                        data?.message ||
+                        'Login failed.'
+                );
+            }
+
+            if (!data?.access_token) {
+                throw new Error(
+                    'The API did not return an access token.'
                 );
             }
 
@@ -118,9 +158,25 @@ function App() {
             );
 
             setToken(data.access_token);
-            navigate('/products');
+
+            window.history.pushState(
+                {},
+                '',
+                '/products'
+            );
+
+            setPath('/products');
         } catch (err) {
-            showError(err.message);
+            if (
+                err instanceof TypeError &&
+                err.message === 'Failed to fetch'
+            ) {
+                showError(handleNetworkError());
+            } else {
+                showError(
+                    err.message || 'Login failed.'
+                );
+            }
         } finally {
             setLoading(false);
         }
@@ -149,26 +205,43 @@ function App() {
                 }
             );
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                if (response.status === 401) {
-                    handleSessionExpired();
-
-                    throw new Error(
-                        'Your session has expired. Please sign in again.'
-                    );
-                }
+            if (response.status === 401) {
+                handleSessionExpired();
 
                 throw new Error(
-                    data.error ||
-                    'Failed to load products.'
+                    'Your session has expired. Please sign in again.'
                 );
             }
 
-            setProducts(data.data || []);
+            if (!response.ok) {
+                const message =
+                    await getApiErrorMessage(
+                        response,
+                        'Failed to load products.'
+                    );
+
+                throw new Error(message);
+            }
+
+            const data = await response.json();
+
+            setProducts(
+                Array.isArray(data?.data)
+                    ? data.data
+                    : []
+            );
         } catch (err) {
-            showError(err.message);
+            if (
+                err instanceof TypeError &&
+                err.message === 'Failed to fetch'
+            ) {
+                showError(handleNetworkError());
+            } else {
+                showError(
+                    err.message ||
+                        'Failed to load products.'
+                );
+            }
         } finally {
             setLoading(false);
         }
@@ -206,17 +279,14 @@ function App() {
     };
 
     useEffect(() => {
-        if (!token) {
-            return;
-        }
-
-        if (!productId) {
+        if (!token || !productId) {
             return;
         }
 
         const existingProduct = products.find(
             (product) =>
-                String(product.id) === String(productId)
+                String(product.id) ===
+                String(productId)
         );
 
         if (existingProduct) {
@@ -244,46 +314,66 @@ function App() {
                 {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type':
+                            'application/json',
                         Authorization: `Bearer ${savedToken}`
                     },
                     body: JSON.stringify({
                         product_name: productName,
-                        description: description,
+                        description,
                         price: Number(price),
                         quantity: Number(quantity)
                     })
                 }
             );
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                if (response.status === 401) {
-                    handleSessionExpired();
-
-                    throw new Error(
-                        'Your session has expired. Please sign in again.'
-                    );
-                }
+            if (response.status === 401) {
+                handleSessionExpired();
 
                 throw new Error(
-                    data.error ||
-                    'Failed to create product.'
+                    'Your session has expired. Please sign in again.'
                 );
             }
+
+            if (!response.ok) {
+                const message =
+                    await getApiErrorMessage(
+                        response,
+                        'Failed to create product.'
+                    );
+
+                throw new Error(message);
+            }
+
+            await response.json().catch(() => null);
 
             await getProducts();
 
             resetProductForm();
 
-            navigate('/products');
+            window.history.pushState(
+                {},
+                '',
+                '/products'
+            );
+
+            setPath('/products');
 
             showSuccess(
                 'Product created successfully.'
             );
         } catch (err) {
-            showError(err.message);
+            if (
+                err instanceof TypeError &&
+                err.message === 'Failed to fetch'
+            ) {
+                showError(handleNetworkError());
+            } else {
+                showError(
+                    err.message ||
+                        'Failed to create product.'
+                );
+            }
         } finally {
             setLoading(false);
         }
@@ -317,46 +407,66 @@ function App() {
                 {
                     method: 'PUT',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type':
+                            'application/json',
                         Authorization: `Bearer ${savedToken}`
                     },
                     body: JSON.stringify({
                         product_name: productName,
-                        description: description,
+                        description,
                         price: Number(price),
                         quantity: Number(quantity)
                     })
                 }
             );
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                if (response.status === 401) {
-                    handleSessionExpired();
-
-                    throw new Error(
-                        'Your session has expired. Please sign in again.'
-                    );
-                }
+            if (response.status === 401) {
+                handleSessionExpired();
 
                 throw new Error(
-                    data.error ||
-                    'Failed to update product.'
+                    'Your session has expired. Please sign in again.'
                 );
             }
+
+            if (!response.ok) {
+                const message =
+                    await getApiErrorMessage(
+                        response,
+                        'Failed to update product.'
+                    );
+
+                throw new Error(message);
+            }
+
+            await response.json().catch(() => null);
 
             await getProducts();
 
             resetProductForm();
 
-            navigate('/products');
+            window.history.pushState(
+                {},
+                '',
+                '/products'
+            );
+
+            setPath('/products');
 
             showSuccess(
                 'Product updated successfully.'
             );
         } catch (err) {
-            showError(err.message);
+            if (
+                err instanceof TypeError &&
+                err.message === 'Failed to fetch'
+            ) {
+                showError(handleNetworkError());
+            } else {
+                showError(
+                    err.message ||
+                        'Failed to update product.'
+                );
+            }
         } finally {
             setLoading(false);
         }
@@ -389,22 +499,25 @@ function App() {
                 }
             );
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                if (response.status === 401) {
-                    handleSessionExpired();
-
-                    throw new Error(
-                        'Your session has expired. Please sign in again.'
-                    );
-                }
+            if (response.status === 401) {
+                handleSessionExpired();
 
                 throw new Error(
-                    data.error ||
-                    'Failed to delete product.'
+                    'Your session has expired. Please sign in again.'
                 );
             }
+
+            if (!response.ok) {
+                const message =
+                    await getApiErrorMessage(
+                        response,
+                        'Failed to delete product.'
+                    );
+
+                throw new Error(message);
+            }
+
+            await response.json().catch(() => null);
 
             setDeleteProduct(null);
 
@@ -414,7 +527,17 @@ function App() {
                 'Product deleted successfully.'
             );
         } catch (err) {
-            showError(err.message);
+            if (
+                err instanceof TypeError &&
+                err.message === 'Failed to fetch'
+            ) {
+                showError(handleNetworkError());
+            } else {
+                showError(
+                    err.message ||
+                        'Failed to delete product.'
+                );
+            }
         } finally {
             setLoading(false);
         }
@@ -427,10 +550,10 @@ function App() {
         setProducts([]);
 
         resetProductForm();
-
         clearMessages();
 
-        navigate('/');
+        window.history.pushState({}, '', '/');
+        setPath('/');
     };
 
     const filteredProducts = useMemo(() => {
@@ -447,10 +570,14 @@ function App() {
                 String(product.id)
                     .toLowerCase()
                     .includes(term) ||
-                String(product.product_name || '')
+                String(
+                    product.product_name || ''
+                )
                     .toLowerCase()
                     .includes(term) ||
-                String(product.description || '')
+                String(
+                    product.description || ''
+                )
                     .toLowerCase()
                     .includes(term)
             );
@@ -489,8 +616,12 @@ function App() {
                     description={description}
                     price={price}
                     quantity={quantity}
-                    setProductName={setProductName}
-                    setDescription={setDescription}
+                    setProductName={
+                        setProductName
+                    }
+                    setDescription={
+                        setDescription
+                    }
                     setPrice={setPrice}
                     setQuantity={setQuantity}
                     onSubmit={createProduct}
@@ -511,8 +642,12 @@ function App() {
                     description={description}
                     price={price}
                     quantity={quantity}
-                    setProductName={setProductName}
-                    setDescription={setDescription}
+                    setProductName={
+                        setProductName
+                    }
+                    setDescription={
+                        setDescription
+                    }
                     setPrice={setPrice}
                     setQuantity={setQuantity}
                     onSubmit={updateProduct}
@@ -530,7 +665,9 @@ function App() {
                 !isEditPage && (
                     <ProductsPage
                         products={filteredProducts}
-                        totalProducts={products.length}
+                        totalProducts={
+                            products.length
+                        }
                         search={search}
                         setSearch={setSearch}
                         loading={loading}
@@ -549,7 +686,9 @@ function App() {
                                 `/products/${product.id}/edit`
                             );
                         }}
-                        onDelete={setDeleteProduct}
+                        onDelete={
+                            setDeleteProduct
+                        }
                     />
                 )}
 
@@ -693,7 +832,8 @@ function LoginPage({
                                 value={username}
                                 onChange={(event) =>
                                     setUsername(
-                                        event.target.value
+                                        event.target
+                                            .value
                                     )
                                 }
                                 autoComplete="username"
@@ -711,7 +851,8 @@ function LoginPage({
                                 value={password}
                                 onChange={(event) =>
                                     setPassword(
-                                        event.target.value
+                                        event.target
+                                            .value
                                     )
                                 }
                                 autoComplete="current-password"
@@ -1087,7 +1228,8 @@ function ProductFormPage({
                                 value={productName}
                                 onChange={(event) =>
                                     setProductName(
-                                        event.target.value
+                                        event.target
+                                            .value
                                     )
                                 }
                                 placeholder="Enter product name"
@@ -1105,7 +1247,8 @@ function ProductFormPage({
                                 value={description}
                                 onChange={(event) =>
                                     setDescription(
-                                        event.target.value
+                                        event.target
+                                            .value
                                     )
                                 }
                                 placeholder="Enter a short product description"
@@ -1172,7 +1315,8 @@ function ProductFormPage({
                                 value={quantity}
                                 onChange={(event) =>
                                     setQuantity(
-                                        event.target.value
+                                        event.target
+                                            .value
                                     )
                                 }
                                 placeholder="0"
